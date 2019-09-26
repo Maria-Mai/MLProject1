@@ -37,7 +37,6 @@ class DecisionTree(object):
         self.root_node = self.__learn_tree(X_train, y_train, impurity_measure_func)
 
         if(prune):
-            print(X_val, y_val)
             self.__prune_tree(X_val, y_val, self.root_node)
 
 
@@ -72,7 +71,7 @@ class DecisionTree(object):
             entropy -= tmp * math.log(tmp, 2)
         return entropy
 
-    def __IG(self, impurity, P_value, X_label_train, y_label_train, X_non_label_train, y_non_label_train, impurity_measure):
+    def __IG(self, impurity, P_value, X_label_train, y_label_train, X_non_label_train, y_non_label_train):
         """
         this method calculates the information gain of two classes
         :param impurity: overall entropy (H(DEC))
@@ -84,16 +83,16 @@ class DecisionTree(object):
         :param impurity_measure: impurity measure (entropy/IG or gini)
         :return: impurity of the label that divided the data into two sets
         """
-        impurity_label = impurity - P_value * impurity_measure(X_label_train, y_label_train) - \
-                         (1-P_value)*impurity_measure(X_non_label_train, y_non_label_train)
+        impurity_label = impurity - P_value * self.__entropy(X_label_train, y_label_train) - \
+                         (1-P_value)*self.__entropy(X_non_label_train, y_non_label_train)
         return impurity_label
 
     def __gini(self, X_train, y_train):
         """
-        calculates the gini coefficient of a data set
+        calculates the gini index of a data set
         :param X_train: data
         :param y_train: target
-        :return: gini coefficient
+        :return: gini index
         """
         gini = 1.0
         unique_counts = self.__unique_counts(y_train)
@@ -128,20 +127,63 @@ class DecisionTree(object):
         :param y_train: target
         :return: dictionary with class and count
         """
-
         unique, counts = np.unique(y_train, return_counts=True)
         return dict(zip(unique, counts))
 
-    def __learn_tree(self, X_train, y_train, impurity_measure):
+    def learn(self, X_train, y_train, impurity_measure="entropy", prune=False, prune_size=0.3):
         """
-        learns the decision tree by a chosen impurity measure
+        learns the decision tree
         :param X_train: training data
         :param y_train: training target
-        :param impurity_measure: can be entropy/information gain or gini coefficient
-        :return: root node of the tree
+        :param impurity_measure: impurity measure (entropy or gini)
+        :param prune: if the tree should be pruned
+        :param prune_size: size of the pruning set
         """
 
-        best_impurity = 0.0
+        # divide into train validation
+        validation_data = None
+        if (prune):
+            X_train, y_train, X_val, y_val = self.__divide_train_validation_data(X_train, y_train, prune_size)
+
+        if (impurity_measure == "entropy"):
+            impurity_measure_func = self.__entropy
+        else:
+            impurity_measure_func = self.__gini
+
+        self.root_node = self.__best_split(Node(X_train=X_train, y_train=y_train), impurity_measure_func)
+        self.__learn_tree(self.root_node, impurity_measure_func)
+
+        if (prune):
+            self.__prune_tree(X_val, y_val, self.root_node)
+
+    def __best_split(self, node, impurity_measure):
+        """
+        updates node after finding the best split
+        :param node: current node
+        :param impurity_measure: impurity measure (entropy or gini)
+        :return: updated current node
+        """
+
+        if(impurity_measure == self.__entropy):
+            column, label, true_node, false_node = self.__best_split_entropy(node)
+        else:
+            column, label, true_node, false_node = self.__best_split_gini(node)
+
+        node.column = column
+        node.label=label
+        node.true_node=true_node
+        node.false_node=false_node
+
+        return node
+
+    def __best_split_gini(self, node):
+        """
+        calculates the gini index and finds the best split
+        :param node: current node
+        :return: best values for the node
+        """
+
+        best_impurity = 999
         best_column = None
         best_label = None
         best_X_train_label = None
@@ -149,53 +191,112 @@ class DecisionTree(object):
         best_y_train_non_label = None
         best_X_train_non_label = None
 
-        # calculate entropy H(DEC)
-        if (impurity_measure == self.__entropy):
-            impurity = impurity_measure(X_train, y_train)
-
-        print("neue runde")
+        X_train = node.X_train
+        y_train = node.y_train
 
         column_number = 0
-        # calculate IG
+        # calculate smallest gini
         for column in X_train.T:
-            #split: divide the data into 3 labels (quantile) to speed up the process
+            # split: divide the data into 3 labels (quantile) to speed up the process
             labels = np.quantile(column, [0.25, 0.5, 0.75])
+            #label = np.mean(column)
 
             for label in labels:
-                X_label_train, y_label_train, X_non_label_train, y_non_label_train = self.__divide_data(X_train, y_train, column_number, label)
-                # if iG and entropy
-                if(impurity_measure == self.__entropy):
-                    P_value = X_label_train.shape[0] / X_train.shape[0]
-                    IG_or_gini= self.__IG(impurity, P_value, X_label_train, y_label_train, X_non_label_train, y_non_label_train, impurity_measure)
-                else: # if gini todo mehr als ein unique!!!!
-                    gini_label_data = self.__gini(X_label_train, y_label_train) * (X_label_train.shape[0]/X_train.shape[0])
-                    gini_non_label_data = self.__gini(X_non_label_train, y_non_label_train) * (X_non_label_train.shape[0]/X_train.shape[0])
-                    print("gini label: " + str(gini_label_data) + " gini non label: " +str(gini_non_label_data) + " laenge: " + str(X_label_train.shape[0]) + "," + str(X_non_label_train.shape[0]))
-                    IG_or_gini = gini_label_data + gini_non_label_data
-                    print("gini total: " +str(IG_or_gini))
+                X_label_train, y_label_train, X_non_label_train, y_non_label_train = self.__divide_data(X_train,y_train,column_number,label)
 
-                if(IG_or_gini > best_impurity and X_label_train.shape[0] > 0 and X_non_label_train.shape[0] > 0): #todo das problem liegt hier
-                   #todo auslagern kleiner vs groeßer
-                    best_impurity = IG_or_gini
+                gini_label_data = self.__gini(X_label_train, y_label_train) * (X_label_train.shape[0] / X_train.shape[0])
+                gini_non_label_data = self.__gini(X_non_label_train, y_non_label_train) * (X_non_label_train.shape[0] / X_train.shape[0])
+                gini = gini_label_data + gini_non_label_data
+
+                if (gini < best_impurity):
+                    best_impurity = gini
                     best_column = column_number
                     best_label = label
                     best_X_train_label = X_label_train
                     best_y_train_label = y_label_train
                     best_y_train_non_label = y_non_label_train
                     best_X_train_non_label = X_non_label_train
+
             column_number += 1
 
-        print("best impu: " + str(best_impurity))
-        if(best_impurity > 0):
-            true_node = self.__learn_tree(best_X_train_label, best_y_train_label, impurity_measure)
-            false_node = self.__learn_tree(best_X_train_non_label, best_y_train_non_label, impurity_measure)
-            return Node(column=best_column, label=best_label, true_node=true_node, false_node=false_node)
-        else:
-            #get last left over value
-            uniques = self.__unique_counts(y_train)
-            print("uniques in else: " + str(uniques))
+        if(best_X_train_non_label.shape[0] == 0):
+            best_X_train_non_label = None
+
+        if (best_X_train_label.shape[0] == 0):
+            best_X_train_label = None
+
+        return best_column, best_label, Node(X_train=best_X_train_label, y_train=best_y_train_label), Node(X_train=best_X_train_non_label, y_train=best_y_train_non_label)
+
+    def __best_split_entropy(self, node):
+        """
+        calculates the information gain and finds the best split
+        :param node: current node
+        :return: best values for the node
+        """
+
+        best_impurity = 0
+        best_column = None
+        best_label = None
+        best_X_train_label = None
+        best_y_train_label = None
+        best_y_train_non_label = None
+        best_X_train_non_label = None
+
+        X_train = node.X_train
+        y_train = node.y_train
+        impurity = self.__entropy(X_train, y_train)
+
+        column_number = 0
+        # calculate IG
+        for column in X_train.T:
+            # split: divide the data into 3 labels (quantile) to speed up the process
+            labels = np.quantile(column, [0.25, 0.5, 0.75])
+
+            for label in labels:
+                X_label_train, y_label_train, X_non_label_train, y_non_label_train = self.__divide_data(X_train, y_train, column_number, label)
+
+                P_value = X_label_train.shape[0] / X_train.shape[0]
+                IG = self.__IG(impurity, P_value, X_label_train, y_label_train, X_non_label_train, y_non_label_train)
+
+                if(IG > best_impurity):
+                    best_impurity = IG
+                    best_column = column_number
+                    best_label = label
+                    best_X_train_label = X_label_train
+                    best_y_train_label = y_label_train
+                    best_y_train_non_label = y_non_label_train
+                    best_X_train_non_label = X_non_label_train
+
+            column_number +=1
+
+        return best_column, best_label, Node(X_train=best_X_train_label, y_train=best_y_train_label), Node(X_train=best_X_train_non_label, y_train=best_y_train_non_label)
+
+    def __learn_tree(self, node, impurity_measure):
+        """
+        learns the decision tree recursive and starts with the root node
+        :param node:  current node
+        :param impurity_measure: impurity measure
+        """
+
+        true_node = node.true_node
+        false_node = node.false_node
+        X_train_true = true_node.X_train
+        X_train_false = false_node.X_train
+
+        #cant split anymore, then make leaf
+        if not isinstance(X_train_true, np.ndarray) or not isinstance(X_train_false, np.ndarray):
+            uniques = self.__unique_counts(node.y_train)
             for key in uniques:
-                return Node(uniques=key)
+                node.uniques = key
+                true_node = None
+                false_node = None
+                return
+        else:
+            self.__best_split(true_node, impurity_measure)
+            self.__best_split(false_node, impurity_measure)
+
+            self.__learn_tree(true_node, impurity_measure)
+            self.__learn_tree(false_node, impurity_measure)
 
     def __print_tree(self,root_node, ident):
         """
